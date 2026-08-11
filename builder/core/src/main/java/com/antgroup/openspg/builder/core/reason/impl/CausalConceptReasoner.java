@@ -16,10 +16,15 @@ package com.antgroup.openspg.builder.core.reason.impl;
 import com.antgroup.openspg.builder.core.reason.ConceptReasoner;
 import com.antgroup.openspg.builder.core.reason.ReasonerProcessorUtils;
 import com.antgroup.openspg.builder.core.runtime.BuilderCatalog;
+import com.antgroup.openspg.builder.core.strategy.linking.RecordLinking;
 import com.antgroup.openspg.builder.model.record.BaseAdvancedRecord;
 import com.antgroup.openspg.builder.model.record.BaseSPGRecord;
+import com.antgroup.openspg.builder.model.record.RecordAlterOperationEnum;
+import com.antgroup.openspg.builder.model.record.SPGRecordAlterItem;
+import com.antgroup.openspg.builder.model.record.SPGRecordManipulateCmd;
 import com.antgroup.openspg.builder.model.record.property.SPGPropertyRecord;
 import com.antgroup.openspg.builder.model.record.property.SPGPropertyValue;
+import com.antgroup.openspg.cloudext.interfaces.graphstore.GraphStoreClient;
 import com.antgroup.openspg.core.schema.model.semantic.DynamicTaxonomySemantic;
 import com.antgroup.openspg.core.schema.model.semantic.SystemPredicateEnum;
 import com.antgroup.openspg.core.schema.model.semantic.TripleSemantic;
@@ -43,6 +48,8 @@ public class CausalConceptReasoner implements ConceptReasoner<TripleSemantic> {
   @Setter private BuilderCatalog builderCatalog;
   @Setter private Catalog catalog;
   @Setter private GraphState<IVertexId> graphState;
+  @Setter private RecordLinking recordNormalizer;
+  @Setter private GraphStoreClient graphStoreClient;
 
   @Override
   public List<BaseSPGRecord> reason(List<BaseSPGRecord> records, TripleSemantic conceptSemantic) {
@@ -99,11 +106,38 @@ public class CausalConceptReasoner implements ConceptReasoner<TripleSemantic> {
           nextSpgRecords = inductiveConceptReasoner.reason(nextSpgRecords, belongTo);
         }
 
+        // normalize and persist the freshly created records before recursing, so that
+        // their semantic-property edges (e.g. subject -> Company) already exist in the
+        // graph store when the next rule's Structure pattern is matched. Without this,
+        // standardization only happens in the sink stage after the whole propagation
+        // pass has finished, so recursive propagation never matches and every event
+        // chain silently stops after one hop.
+        persistForRecursion(nextSpgRecords);
+
         for (TripleSemantic nextLeadTo :
             conceptList.getLogicalCausation(conceptSemantic.getObjectIdentifier())) {
           propagate(nextSpgRecords, nextLeadTo, results);
         }
       }
+    }
+  }
+
+  private void persistForRecursion(List<BaseSPGRecord> records) {
+    if (recordNormalizer == null || graphStoreClient == null) {
+      return;
+    }
+    try {
+      List<SPGRecordAlterItem> items = new ArrayList<>();
+      for (BaseSPGRecord record : records) {
+        recordNormalizer.linking(record);
+        items.add(new SPGRecordAlterItem(RecordAlterOperationEnum.UPSERT, record));
+      }
+      if (!items.isEmpty()) {
+        graphStoreClient.manipulateRecord(new SPGRecordManipulateCmd(items));
+      }
+    } catch (Throwable e) {
+      // fail-open: propagation simply stops at this hop (pre-existing behavior) and
+      // the sink stage at the end of the pass still persists these records
     }
   }
 

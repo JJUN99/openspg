@@ -31,6 +31,7 @@ import com.antgroup.openspg.builder.model.record.SubGraphRecord;
 import com.antgroup.openspg.core.schema.model.semantic.DynamicTaxonomySemantic;
 import com.antgroup.openspg.core.schema.model.semantic.TripleSemantic;
 import com.antgroup.openspg.core.schema.model.type.ConceptList;
+import com.antgroup.openspg.cloudext.interfaces.graphstore.GraphStoreClientDriverManager;
 import com.antgroup.openspg.reasoner.catalog.impl.OpenSPGCatalog;
 import com.antgroup.openspg.reasoner.common.graph.vertex.IVertexId;
 import com.antgroup.openspg.reasoner.graphstate.GraphState;
@@ -75,6 +76,11 @@ public class ReasonProcessor extends BaseProcessor<ReasonProcessor.ReasonerNodeC
 
     this.recordNormalizer = new RecordLinkingImpl();
     this.recordNormalizer.init(context);
+    // allow the causal reasoner to persist generated records before recursive
+    // propagation (same client acquisition path as GraphStoreSinkWriter.doInit)
+    this.causalConceptReasoner.setRecordNormalizer(this.recordNormalizer);
+    this.causalConceptReasoner.setGraphStoreClient(
+        GraphStoreClientDriverManager.getClient(context.getGraphStoreUrl()));
     if (context.getProject() != null) {
       project = JSON.parseObject(context.getProject(), Project.class);
     }
